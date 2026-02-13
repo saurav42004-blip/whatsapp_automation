@@ -1,0 +1,3112 @@
+{
+  "name": "DA_WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        512
+      ],
+      "id": "260b3eee-d0d6-4fe7-ad1e-67e9ed8e79c1",
+      "name": "WhatsApp Trigger",
+      "webhookId": "23c2c95b-beca-4fc1-ae62-1db6f24b4dbf",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "g2zkwIeloa1y5pgw",
+          "name": "WhatsApp OAuth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=\"{{ $json.text }}\"\n\nIn every case consult sheet's tool.",
+        "options": {
+          "systemMessage": "=STEP 1: Intent Detection & Message Type Handling\n\nYour first task is to determine whether the incoming message relates to a tour booking.\n\n- If the message clearly contains or requests a booking/tour or is in continuation to previous booking request (check this via memory tool), proceed to Step 2.\n- If the message is a greeting, general inquiry, or unrelated to a booking, DO NOT attempt extraction.\n\nOutput for Non-Booking Messages:\n{\n  \"status\": \"incomplete\",\n  \"message\": \"I am an automation agent designed to manage WhatsApp booking messages. I can only process booking-related information. Please provide details for a booking.\"\n}\n\n---\n\nSTEP 2: Confirmation & Data Extraction Logic\n\nPriority 1: Check for Confirmation Response\n\nIf the last output had status: \"confirmation\", handle this first:\n- If the user confirms (e.g., “Yes,” “Correct,” “Confirm,” “Proceed,” 👍):\n  → Skip extraction, finalize previous data → Output Case C (Final Confirmation).\n- If the user makes corrections (e.g., “Change time to 5 PM”):\n  → Re-extract from the new message, replacing corrected values, then continue normally.\n\n---\n\nPriority 2: Target Schema & Field Rules\n\nPopulate this JSON object. Follow the below strict rules for each field.\n\ntour_name (Mandatory)\n- After extracting, immediately validate via Get Tour Names tool using fuzzy, case-insensitive match.\n- Matching rules:\n  1. Multiple close matches → do NOT finalize the tour name, instead:\n     → Set `\"status\": \"incomplete\"` and respond with a clarifying `\"message\"` asking the user to choose one from the possible matches (e.g., \"mangrove tour\" → either \"Mangroves Kayaking\" or \"Mangroves Planting Program\"). Ask the user for the correct name.\n\n  2. Single clear match → replace with exact standardized tour name from sheet.\n\n  3. No match → Automatically **set the tour name** as `\"New: <tour name>\"` (e.g., `\"mall visit\"` → `\"New: Mall Visit\"`) skip Case B messaging in this.\n- Always capitalize each word properly (e.g., `\"city tour\"` → `\"City Tour\"`, `\"mall visit\"` → `\"New: Mall Visit\"`).\n\ndate (Mandatory)\n- Format strictly as DD-MM-YYYY.\n- Parse relative terms (“tomorrow”, \"this month\", “next week”) to actual dates using system time: {{ DateTime.now() }}.\n\ntime (Mandatory)\n- Format strictly as HH:mm (24-hour).\n- Accept variants like “5 PM,” “evening 5,” etc.\n\npax (Mandatory)\n- Must represent number of guests/passengers.\n- Accept patterns: “for 2 people,” “4 pax,” “group of 5”, \"PAX=6\".\n- Default = 1 if not found.\n- Do not confuse with monetary values:\n  - If number followed by currency (e.g., “500 AED”), treat as amount_due.\n  - If number followed by “persons,” “people,” “guests,” “pax,” etc., treat as pax.\n  - Under any confusion, return \"status\": \"incomplete\" asking user for clarification via Case B.\n\n\ncustomer_name (Mandatory)\n- Extract proper name; prefix with \"Mr./Ms.\" if missing.\n\ncustomer_number (Mandatory)\n- Normalize with country code, no “+” sign (e.g., 919876543210).\n- If code missing (≤ 10 digits or unknown prefix), return \"status\": \"incomplete\" asking user for country code for customer's number via Case B.\n\ncustomer_email (Optional)\n- Default = null if absent.\n\ntransfer (Optional, Default = “No”)\n- If user mentions pickup/drop location, hotel/location, any address: transfer → set \"Yes\".\n- If \"Yes\", the following become mandatory:\n  - driver_name\n  - driver_number\n  - pickup_location\n  - pickup_time\n\ndriver_name (Conditionally Mandatory)\n- Mandatory only if transfer = “Yes”.\n- Prefix with \"Mr./Ms.\" if missing, else null.\n\ndriver_number (Conditionally Mandatory)\n- Mandatory only if transfer = “Yes”.\n- Normalize and validate like customer_number.\n- If code missing (≤ 10 digits or unknown prefix), return \"status\": \"incomplete\" asking user for country code for driver's number via Case B.\n\npickup_location (Conditionally Mandatory)\n- Mandatory only if transfer = “Yes”.\n- Capitalize each word (e.g., “al arab tower” → “Al Arab Tower”).\n- If any location mentioned, ensure driver_name and driver_number are not null.\n\npickup_time (Conditionally Mandatory)\n- Mandatory only if transfer = “Yes”.\n- Format as HH:mm (24 hour).\n\nadditional_service (Optional)\n- Might not be told explicitly so check accordingly.\n- Default = null if absent.\n\nguide_name (Mandatory)\n- Prefix with \"Mr./Ms.\" if missing.\n\nguide_number (Mandatory)\n- Normalize and validate like customer_number.\n- If code missing (≤ 10 digits or unknown prefix), return \"status\": \"incomplete\" asking user for country code for guide's number via Case B.\n\npayment_status (Mandatory)\n- Must be exactly \"Paid\" or \"Pending\".\n- Infer from words like “done,” “completed,” “sent” → Paid;\n  “will pay,” “pending,” “on arrival” → Pending.\n\namount_due (Mandatory)\n- If payment_status = “Paid”, set to 0.\n- If payment_status = “Pending”, extract due amount with currency and if either is missing (null), return the JSON's output \"status\": \"incomplete\" with message asking the user to provide both via Case B.\n\ntour_language (Optional)\n- Default = English, if nothing mentioned.\n\n---\n\nSTEP 3: Output Logic\n\nCase A – All Mandatory Fields Present (Ask Confirmation)\nIf all required (and conditional) fields are filled → ask user to confirm:\n(Note: Check again and incase any mandatory field is absent/missing/null switch to case B asking for the same and skip case A)\n{\n  \"status\": \"confirmation\",\n  \"message\": \"Please confirm the following booking details before it gets finalized.\",\n  \"data_preview\": {\n    \"tour_name\": \"\",\n    \"date\": \"\",\n    \"time\": \"\",\n    \"pax\": \"\",\n    \"customer_name\": \"\",\n    \"customer_number\": \"\",\n    \"customer_email\": \"\",\n    \"transfer\": \"\",\n    \"driver_name\": \"\",\n    \"driver_number\": \"\",\n    \"pickup_location\": \"\",\n    \"pickup_time\": \"\",\n    \"additional_service\": \"\",\n    \"guide_name\": \"\",\n    \"guide_number\": \"\",\n    \"payment_status\": \"\",\n    \"amount_due\": \"\",\n    \"tour_language\": \"\"\n  }\n}\n\nCase B – Missing Mandatory Fields\nIf any mandatory or conditionally mandatory field is missing:\n\n{\n  \"status\": \"incomplete\",\n  \"missing_fields\": [\"field_name_1\", \"field_name_2\"],\n  \"message\": \"To complete the booking, please provide the following: [list of missing fields].\"\n}\n\nCase C – Final Confirmation\nIf user confirmed the preview:\n\n{\n  \"status\": \"complete\",\n  \"tour_name\": \"\",\n  \"date\": \"\",\n  \"time\": \"\",\n  \"pax\": \"\",\n  \"customer_name\": \"\",\n  \"customer_number\": \"\",\n  \"customer_email\": \"\",\n  \"transfer\": \"\",\n  \"driver_name\": \"\",\n  \"driver_number\": \"\",\n  \"pickup_location\": \"\",\n  \"pickup_time\": \"\",\n  \"additional_service\": \"\",\n  \"guide_name\": \"\",\n  \"guide_number\": \"\",\n  \"payment_status\": \"\",\n  \"amount_due\": \"\",\n  \"tour_language\": \"\"\n}\n\n---\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        1664,
+        496
+      ],
+      "id": "6c9a80ab-fd18-46b1-908e-b4a018848085",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "=Always consult this tool to get rows and to find tour names detail from the Tours Info sheet and match the name with the tour name provided by user",
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Tours Info",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.7,
+      "position": [
+        1904,
+        704
+      ],
+      "id": "566a50b2-d308-455c-b622-ac483a2d1ca2",
+      "name": "Get Tour Names",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "I82S2hMMGRkTwcJl",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        400,
+        1632
+      ],
+      "id": "b2bdec3d-65b7-4004-ac7e-617fe8d91f2e",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Checks for WA Message').item.json.messages[0].from }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1744,
+        704
+      ],
+      "id": "059b0d0c-50fe-4c27-9f3d-f519b23c905b",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "content": "# Runs at 9 am Everyday\n## It loops over each data in the database and sends reminder to the Guide and \n## the Driver (if any) for their assigned tour scheduled either the same day or next day.",
+        "height": 624,
+        "width": 2464,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        352,
+        1392
+      ],
+      "typeVersion": 1,
+      "id": "5d05adcf-5656-4fd5-b7da-3bd0522cb54d",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Sends WA Reminder to Guide.",
+        "height": 240,
+        "width": 368
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2400,
+        1424
+      ],
+      "typeVersion": 1,
+      "id": "28f1217f-4058-48c9-8843-35ffcda6d90c",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## Sends WA Reminder to Driver.",
+        "height": 240,
+        "width": 368
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2400,
+        1744
+      ],
+      "typeVersion": 1,
+      "id": "52a32299-aeb9-4d3a-bdaf-00250f3c5b4c",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Sheets coming from the master list\nconst masterSheets = $input.all().map(i => i.json['Tour Name']).filter(Boolean);\n\n// 2. Additional fixed sheet names you want to include\nconst extraSheets = [\"other tours data\"]; \n\n// 3. Combine and remove duplicates\nconst allSheets = Array.from(new Set([...masterSheets, ...extraSheets]));\n\n// 4. Return them as separate items for further processing\nreturn allSheets.map(name => ({ json: { sheet_name: name } }));\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        1632
+      ],
+      "id": "a29bdc4b-f748-4e24-be0d-ce49550ff3fd",
+      "name": "Sheet List Aggregator"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1056,
+        1632
+      ],
+      "id": "9999c99e-c3c3-41ec-a315-e50752fd743b",
+      "name": "Loop Over Sheets"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "14b605f2-bec4-4d3b-8ae6-26cc66986e94",
+              "leftValue": "={{ $json[\"Tour Date\"] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1376,
+        1616
+      ],
+      "id": "4df6ee7f-4d1a-46f4-b4c2-ab3cd4bbddeb",
+      "name": "Checks for Empty Sheets"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json[\"Driver Number\"].toLocaleString() }}",
+                    "rightValue": "NA",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "dbca7e84-959f-4d61-917c-8b8983fda36d"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "To Guide"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "7f9df4d8-7b23-4c56-a60d-45dc6f4da763",
+                    "leftValue": "={{ $json[\"Driver Number\"].toLocaleString() }}",
+                    "rightValue": "NA",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEquals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "To Guide+Driver"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1856,
+        1600
+      ],
+      "id": "02dc7c53-eb56-427f-9e1c-09dbe484e15e",
+      "name": "Guide/Driver Routing"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/843177978870149/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $json['Guide Number'] }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"auto_tour_reminder\",\n    \"language\": { \"code\": \"en\" },\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          { \"type\": \"text\", \"parameter_name\": \"text\", \"text\": \"{{ $json['Tour Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"date\", \"text\": \"{{ $json['Tour Date'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"time\", \"text\": \"{{ $json['Tour Time'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"num\", \"text\": \"{{ $json['PAX'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text2\", \"text\": \"{{ $json['Customer Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number\", \"text\": \"{{ $json['Customer Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"email\", \"text\": \"{{ $json['Customer Email'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text3\", \"text\": \"{{ $json['Transfer'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text4\", \"text\": \"{{ $json['Driver Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number2\", \"text\": \"{{ $json['Driver Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"address\", \"text\": \"{{ $json['Pick-up Location'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"time2\", \"text\": \"{{ $json['Pick-up Time'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text5\", \"text\": \"{{ $json['Additional Service'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text6\", \"text\": \"{{ $json['Guide Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number4\", \"text\": \"{{ $json['Guide Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text7\", \"text\": \"{{ $json['Payment Status'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number5\", \"text\": \"{{ $json['Amount Due'] }}\" }\n        ]\n      }\n    ]\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2464,
+        1488
+      ],
+      "id": "0e7ffd23-f3be-45f1-9b36-5ef7813e24dd",
+      "name": "Reminder to Guide",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sJ7xz1FZWk06hKQN",
+          "name": "WA Template Cred."
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/843177978870149/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $json['Driver Number'] }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"auto_tour_reminder\",\n    \"language\": { \"code\": \"en\" },\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          { \"type\": \"text\", \"parameter_name\": \"text\", \"text\": \"{{ $json['Tour Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"date\", \"text\": \"{{ $json['Tour Date'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"time\", \"text\": \"{{ $json['Tour Time'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text2\", \"text\": \"{{ $json['Customer Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number\", \"text\": \"{{ $json['Customer Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"email\", \"text\": \"{{ $json['Customer Email'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text3\", \"text\": \"{{ $json['Transfer'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text4\", \"text\": \"{{ $json['Driver Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number2\", \"text\": \"{{ $json['Driver Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"address\", \"text\": \"{{ $json['Pick Up'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text5\", \"text\": \"{{ $json['Additional Service'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text6\", \"text\": \"{{ $json['Guide Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number4\", \"text\": \"{{ $json['Guide Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text7\", \"text\": \"{{ $json['Payment Status'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number5\", \"text\": \"{{ $json['Amount Due'] }}\" }\n        ]\n      }\n    ]\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2464,
+        1808
+      ],
+      "id": "9261e9d5-5fe9-45ad-8600-25e582c6e076",
+      "name": "Reminder to Driver",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sJ7xz1FZWk06hKQN",
+          "name": "WA Template Cred."
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $json.sheet_name.toLowerCase() }}",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1376,
+        1792
+      ],
+      "id": "4c53624f-b145-4607-bd06-8263030e16ef",
+      "name": "Gets Every Tour Detail",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "retryOnFail": false,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "I82S2hMMGRkTwcJl",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "034980c1-32a8-4829-8f66-a8d0b6173c4e",
+              "leftValue": "={{\n  (d => \n    DateTime.fromFormat(d, \"d/M/yyyy\").isValid \n      ? DateTime.fromFormat(d, \"d/M/yyyy\") \n      : DateTime.fromFormat(d, \"dd-MM-yyyy\")\n  )($json[\"Tour Date\"])\n}}",
+              "rightValue": "={{ DateTime.now().plus({ days: 1 }).toFormat(\"yyyy-MM-dd\") }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "beforeOrEquals"
+              }
+            },
+            {
+              "id": "115f4383-a9eb-4ee9-a433-01679d8eedb5",
+              "leftValue": "={{\n  (d => \n    DateTime.fromFormat(d, \"d/M/yyyy\").isValid \n      ? DateTime.fromFormat(d, \"d/M/yyyy\") \n      : DateTime.fromFormat(d, \"dd-MM-yyyy\")\n  )($json[\"Tour Date\"])\n}}",
+              "rightValue": "={{ DateTime.now().toFormat(\"yyyy-MM-dd\") }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "afterOrEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1664,
+        1600
+      ],
+      "id": "820d5c01-6210-49a3-9e4f-5fd4d8cdad76",
+      "name": "Filtering Tours for Today and Tomorrow"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Tours Info",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        608,
+        1632
+      ],
+      "id": "777d9a5c-ddf5-4bc7-a7ca-cff680302a58",
+      "name": "Get Sheets' Names",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "I82S2hMMGRkTwcJl",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.messages[0].type }}",
+                    "rightValue": "audio",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "25bae4e2-2948-4e5e-a0d4-beb7d8cd74bf"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Audio"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "9213f81e-676d-46e9-8f46-d307869e12f7",
+                    "leftValue": "={{ $json.messages[0].type }}",
+                    "rightValue": "text",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Text"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "a553b440-e518-4c21-b1ad-9a04605c61de",
+                    "leftValue": "={{ $json.messages[0].type }}",
+                    "rightValue": "image",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Image"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        480,
+        480
+      ],
+      "id": "e877d48f-2ca3-4619-abe0-c8270fb9362c",
+      "name": "Message Type Routing"
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "operation": "mediaUrlGet",
+        "mediaGetId": "={{ $json.messages[0].audio.id }}"
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        768,
+        288
+      ],
+      "id": "3b16283e-46d1-4457-8b31-390074aa6f86",
+      "name": "Downloads Audio",
+      "webhookId": "891f13bc-78ae-469c-9d75-626735344ebe",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "Qkwpq4H3JlTH5FKG",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "operation": "mediaUrlGet",
+        "mediaGetId": "={{ $json.messages[0].image.id }}"
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        768,
+        704
+      ],
+      "id": "10468e01-af13-4170-8842-abed2288e36a",
+      "name": "Downloads Image",
+      "webhookId": "891f13bc-78ae-469c-9d75-626735344ebe",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "Qkwpq4H3JlTH5FKG",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "56337e73-09f3-4ad1-9186-df98f5c44ed8",
+              "name": "text",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1296,
+        288
+      ],
+      "id": "87c92435-fc91-4824-b6ea-ef5d59a942aa",
+      "name": "Maps Audio Output"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "55b7027a-08f3-4fda-ad8a-b23ed6d694ca",
+              "name": "text",
+              "value": "={{ $json.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1296,
+        704
+      ],
+      "id": "2714f0d0-9763-4f65-b786-df4892640f45",
+      "name": "Maps Image Output"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6abf9e8c-9e56-47ee-994f-d5fa46da278d",
+              "name": "text",
+              "value": "={{ $json.messages[0].text.body }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1040,
+        496
+      ],
+      "id": "e27aef43-6751-4571-8e98-b8f047f5d1c8",
+      "name": "Maps the WA Text"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status.toLowerCase() }}",
+                    "rightValue": "incomplete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "f5af7d8f-1662-45bb-b2c2-a8af405a70df"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Incomplete"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "97ff3a37-6e72-4e71-8fbc-7a88fba07976",
+                    "leftValue": "={{ $json.status.toLowerCase() }}",
+                    "rightValue": "confirmation",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Confirmation"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "ac6943ed-45da-4feb-a6dc-5631edd0ba3b",
+                    "leftValue": "={{ $json.status.toLowerCase() }}",
+                    "rightValue": "complete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Complete"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2272,
+        480
+      ],
+      "id": "fda98ace-1ecd-4861-8bd7-1e55b6c9d16f",
+      "name": "Details-based Routing"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Assuming Code node is receiving only one item at a time.\nconst item = items[0];\n\n// Define the list of fields you want to check.\nconst fieldsToCheck = [\n  'customer_email',\n  'transfer',\n  'driver_name',\n  'driver_number',\n  'pickup_location',\n  'pickup_time',\n  'additional_service'\n];\n\n// Loop through each field name in your list.\nfor (const key of fieldsToCheck) {\n  if (!item.json[key] || item.json[key]=='null') {\n    // If the value is empty, set it to 'NA'.\n    item.json[key] = 'NA';\n  }\n}\n\nreturn [item];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        848
+      ],
+      "id": "52c9583c-9152-4018-9bdf-fcbb1ce142ac",
+      "name": "Handles Empty/null Values"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "da1406d4-20ab-4781-a339-8052631c188b",
+              "leftValue": "={{ $json.tour_name.toLowerCase() }}",
+              "rightValue": "new",
+              "operator": {
+                "type": "string",
+                "operation": "notStartsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2832,
+        848
+      ],
+      "id": "560e7c1e-ff95-441d-b8fc-5705c5ac4c37",
+      "name": "Routes Non-existent Tour"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "843177978870149",
+        "recipientPhoneNumber": "={{ $('Checks for WA Message').item.json.messages[0].from }}",
+        "textBody": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        240
+      ],
+      "id": "965d39dc-fb4b-48dd-b8c9-209e16987431",
+      "name": "Messages for Missing Details",
+      "webhookId": "b42f5a88-db2c-4ba5-aad4-5826dd68aa5c",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "Qkwpq4H3JlTH5FKG",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the raw output from the previous node (AI Agent)\nlet raw = $json[\"output\"];\n\n// Step 1: Remove code fences (```json ... ```)\nraw = raw.replace(/```json/i, \"\").replace(/```/g, \"\");\n\n// Step 2: Clean escaped newlines and extra spaces\nraw = raw.replace(/\\\\n/g, \"\").trim();\n\n// Step 3: Parse the cleaned JSON safely\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error(\"Failed to parse AI JSON output: \" + e.message + \"\\nRaw content: \" + raw);\n}\n\n// Step 4: Return structured data for next nodes\nreturn parsed;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2096,
+        496
+      ],
+      "id": "cab5d1d5-53c6-42b1-9217-214dde7d86c7",
+      "name": "Parses AI Output"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        944,
+        288
+      ],
+      "id": "0c93e205-0cb2-4733-99c4-746f6323e85e",
+      "name": "Processes Audio",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sJ7xz1FZWk06hKQN",
+          "name": "WA Template Cred."
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        944,
+        704
+      ],
+      "id": "6c7c8687-5cd3-4546-9cb8-d28904b007c8",
+      "name": "Processes Image",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sJ7xz1FZWk06hKQN",
+          "name": "WA Template Cred."
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Processes the Audio file and filters out the detail.",
+        "height": 208,
+        "width": 704,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        736,
+        240
+      ],
+      "typeVersion": 1,
+      "id": "cf180f03-9312-457c-93c1-c806523335b7",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Processes the Image file and gets the detail from it.",
+        "height": 208,
+        "width": 704,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        736,
+        656
+      ],
+      "typeVersion": 1,
+      "id": "00189f54-6898-40ea-b608-e9c9244a64a0",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## Maps the Text Message",
+        "height": 144,
+        "width": 704,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        736,
+        480
+      ],
+      "typeVersion": 1,
+      "id": "65e91487-2b8c-4098-8a6e-fc2ab689a04b",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 954283526,
+          "mode": "list",
+          "cachedResultName": "other tours data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit#gid=954283526"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tour Date": "={{ $json.date }}",
+            "Tour Name": "={{ $json.tour_name }}",
+            "Customer Name": "={{ $json.customer_name }}",
+            "Customer Number": "={{ $json.customer_number }}",
+            "Customer Email": "={{ $json.customer_email }}",
+            "Transfer": "={{ $json.transfer }}",
+            "Driver Name": "={{ $json.driver_name }}",
+            "Driver Number": "={{ $json.driver_number }}",
+            "Additional Service": "={{ $json.additional_service }}",
+            "Guide Name": "={{ $json.guide_name }}",
+            "Guide Number": "={{ $json.guide_number }}",
+            "Payment Status": "={{ $json.payment_status }}",
+            "Amount Due": "={{ $json.amount_due }}",
+            "Tour Language": "={{ $json.tour_language }}",
+            "Tour Status": "Confirmed",
+            "Booking Date": "={{ DateTime.now().toFormat('dd/MM/yyyy HH:mm:ss') }}",
+            "Tour Time": "={{ $json.time }}",
+            "PAX": "={{ $json.pax }}",
+            "Pick-up Time": "={{ $json.pickup_time }}",
+            "Pick-up Location": "={{ $json.pickup_location }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Booking Date",
+              "displayName": "Booking Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Name",
+              "displayName": "Tour Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Date",
+              "displayName": "Tour Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Time",
+              "displayName": "Tour Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "PAX",
+              "displayName": "PAX",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Number",
+              "displayName": "Customer Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Transfer",
+              "displayName": "Transfer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Driver Name",
+              "displayName": "Driver Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Driver Number",
+              "displayName": "Driver Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Pick-up Location",
+              "displayName": "Pick-up Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Pick-up Time",
+              "displayName": "Pick-up Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Additional Service",
+              "displayName": "Additional Service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Guide Name",
+              "displayName": "Guide Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Guide Number",
+              "displayName": "Guide Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Payment Status",
+              "displayName": "Payment Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Amount Due",
+              "displayName": "Amount Due",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Language",
+              "displayName": "Tour Language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Status",
+              "displayName": "Tour Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3104,
+        944
+      ],
+      "id": "cb5fe86d-29cd-435f-8208-8a422b3f7210",
+      "name": "Appends Row for Undefined Tours",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "I82S2hMMGRkTwcJl",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $json.tour_name.toLowerCase() }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Booking Date": "={{ DateTime.now().toFormat('dd/MM/yyyy HH:mm:ss') }}",
+            "Guide Number": "={{ $json.guide_number }}",
+            "Additional Service": "={{ $json.additional_service }}",
+            "Transfer": "={{ $json.transfer }}",
+            "Customer Email": "={{ $json.customer_email }}",
+            "Customer Number": "={{ $json.customer_number }}",
+            "Customer Name": "={{ $json.customer_name }}",
+            "Tour Date": "={{ $json.date }}",
+            "Tour Name": "={{ $json.tour_name }}",
+            "Guide Name": "={{ $json.guide_name }}",
+            "Payment Status": "={{ $json.payment_status }}",
+            "Amount Due": "={{ $json.amount_due }}",
+            "Driver Name": "={{ $json.driver_name }}",
+            "Driver Number": "={{ $json.driver_number }}",
+            "Tour Status": "=Confirmed",
+            "Tour Language": "={{ $json.tour_language }}",
+            "Tour Time": "={{ $json.time }}",
+            "PAX": "={{ $json.pax }}",
+            "Pick-up Location": "={{ $json.pickup_location }}",
+            "Pick-up Time": "={{ $json.pickup_time }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Booking Date",
+              "displayName": "Booking Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Name",
+              "displayName": "Tour Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tour Date",
+              "displayName": "Tour Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tour Time",
+              "displayName": "Tour Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "PAX",
+              "displayName": "PAX",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Number",
+              "displayName": "Customer Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Transfer",
+              "displayName": "Transfer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Driver Name",
+              "displayName": "Driver Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Driver Number",
+              "displayName": "Driver Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Pick-up Location",
+              "displayName": "Pick-up Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Pick-up Time",
+              "displayName": "Pick-up Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Additional Service",
+              "displayName": "Additional Service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Guide Name",
+              "displayName": "Guide Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Guide Number",
+              "displayName": "Guide Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Payment Status",
+              "displayName": "Payment Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Amount Due",
+              "displayName": "Amount Due",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tour Language",
+              "displayName": "Tour Language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tour Status",
+              "displayName": "Tour Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3104,
+        752
+      ],
+      "id": "0c4aade7-281c-4e2a-9381-a968e884c1ed",
+      "name": "Appends Row for Known Tours",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "I82S2hMMGRkTwcJl",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Appends the gathered Tour Details to \n## the sheets and sends confirmation to all.",
+        "height": 448,
+        "width": 2128
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2592,
+        688
+      ],
+      "typeVersion": 1,
+      "id": "0fa45211-ea3d-40c4-870f-a7203bad9825",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "## Messages the Messenger to get missing Tour Details.",
+        "height": 304,
+        "width": 336
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2592,
+        144
+      ],
+      "typeVersion": 1,
+      "id": "8df40f39-7fd3-488b-ae71-c065eb5bd300",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {
+        "content": "\n## The agent is responsible for fetching the details from the WA Messages.",
+        "height": 624,
+        "width": 512,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1520,
+        240
+      ],
+      "typeVersion": 1,
+      "id": "b8da9b78-3c0b-4e86-b77a-f195e95f7b96",
+      "name": "Sticky Note8"
+    },
+    {
+      "parameters": {
+        "content": "# Fetches Details for Booking Tours\n# It interprets the WhatsApp message and fetches the tour details from it and\n# asks for any missing details. It then updates the sheet with the new booking details.",
+        "height": 1184,
+        "width": 4832,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -64,
+        0
+      ],
+      "typeVersion": 1,
+      "id": "67d397cd-7cd0-4e26-88fb-879eb168d9f4",
+      "name": "Sticky Note9"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e69b1546-8be2-4fec-aec6-92034855a104",
+              "leftValue": "={{ $json.messages }}",
+              "rightValue": "",
+              "operator": {
+                "type": "array",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        512
+      ],
+      "id": "a769a1b0-b206-4704-ab1d-e476e626e2bd",
+      "name": "Checks for WA Message"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/843177978870149/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $('Confirmation Routing').item.json['Driver Number'] }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"auto_tour_reminder\",\n    \"language\": { \"code\": \"en\" },\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          { \"type\": \"text\", \"parameter_name\": \"text\", \"text\": \"{{ $('Confirmation Routing').item.json['Tour Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"date\", \"text\": \"{{ $('Confirmation Routing').item.json['Tour Date'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"time\", \"text\": \"{{ $('Confirmation Routing').item.json['Tour Time'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"num\", \"text\": \"{{ $('Confirmation Routing').item.json['PAX'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text2\", \"text\": \"{{ $('Confirmation Routing').item.json['Customer Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number\", \"text\": \"{{ $('Confirmation Routing').item.json['Customer Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"email\", \"text\": \"{{ $('Confirmation Routing').item.json['Customer Email'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text3\", \"text\": \"{{ $('Confirmation Routing').item.json['Transfer'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text4\", \"text\": \"{{ $('Confirmation Routing').item.json['Driver Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number2\", \"text\": \"{{ $('Confirmation Routing').item.json['Driver Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"address\", \"text\": \"{{ $('Confirmation Routing').item.json['Pick-up Location'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"time2\", \"text\": \"{{ $('Confirmation Routing').item.json['Pick-up Time'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text5\", \"text\": \"{{ $('Confirmation Routing').item.json['Additional Service'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text6\", \"text\": \"{{ $('Confirmation Routing').item.json['Guide Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number4\", \"text\": \"{{ $('Confirmation Routing').item.json['Guide Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text7\", \"text\": \"{{ $('Confirmation Routing').item.json['Payment Status'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number5\", \"text\": \"{{ $('Confirmation Routing').item.json['Amount Due'] }}\" }\n        ]\n      }\n    ]\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3856,
+        960
+      ],
+      "id": "4b240e1c-bd3b-453b-ba5c-54b400cc0059",
+      "name": "Tour Confirmation (Driver)",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sJ7xz1FZWk06hKQN",
+          "name": "WA Template Cred."
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "=843177978870149",
+        "recipientPhoneNumber": "={{ $('Checks for WA Message').item.json.messages[0].from }}",
+        "textBody": "={{ $json.message }}\nIf any changes kindly state them else reply with a \"Yes\".\n\nData Preview:\nTour Name: {{ $json.data_preview.tour_name }}\nTour Date: {{ $json.data_preview.date }}\nTour Time: {{ $json.data_preview.time }}\nPAX: {{ $json.data_preview.pax }}\n\nCustomer Name: {{ $json.data_preview.customer_name }}\nCustomer Number: {{ $json.data_preview.customer_number }}\nCustomer Email: {{ $json.data_preview.customer_email }}\n\nTransfer: {{ $json.data_preview.transfer }}\nDriver Name: {{ $json.data_preview.driver_name }}\nDriver Number: {{ $json.data_preview.driver_number }}\nPick-up Location: {{ $json.data_preview.pickup_location }}\nPick-up Time: {{ $json.data_preview.pickup_time }}\n\nAdditional Service: {{ $json.data_preview.additional_service }}\n\nGuide Name: {{ $json.data_preview.guide_name }}\nGuide Number: {{ $json.data_preview.guide_number }}\n\nPayment Status: {{ $json.data_preview.payment_status }}\nAmount Due: {{ $json.data_preview.amount_due }}\n\nTour Language: {{ $json.data_preview.tour_language }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        2848,
+        496
+      ],
+      "id": "4abf65db-e09f-490b-a847-16d625775910",
+      "name": "Details Confirmation Message",
+      "webhookId": "b42f5a88-db2c-4ba5-aad4-5826dd68aa5c",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "Qkwpq4H3JlTH5FKG",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/843177978870149/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $('Confirmation Routing').item.json['Guide Number'] }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"auto_tour_reminder\",\n    \"language\": { \"code\": \"en\" },\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          { \"type\": \"text\", \"parameter_name\": \"text\", \"text\": \"{{ $('Confirmation Routing').item.json['Tour Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"date\", \"text\": \"{{ $('Confirmation Routing').item.json['Tour Date'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"time\", \"text\": \"{{ $('Confirmation Routing').item.json['Tour Time'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"num\", \"text\": \"{{ $('Confirmation Routing').item.json['PAX'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text2\", \"text\": \"{{ $('Confirmation Routing').item.json['Customer Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number\", \"text\": \"{{ $('Confirmation Routing').item.json['Customer Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"email\", \"text\": \"{{ $('Confirmation Routing').item.json['Customer Email'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text3\", \"text\": \"{{ $('Confirmation Routing').item.json['Transfer'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text4\", \"text\": \"{{ $('Confirmation Routing').item.json['Driver Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number2\", \"text\": \"{{ $('Confirmation Routing').item.json['Driver Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"address\", \"text\": \"{{ $('Confirmation Routing').item.json['Pick-up Location'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"time2\", \"text\": \"{{ $('Confirmation Routing').item.json['Pick-up Time'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text5\", \"text\": \"{{ $('Confirmation Routing').item.json['Additional Service'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text6\", \"text\": \"{{ $('Confirmation Routing').item.json['Guide Name'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number4\", \"text\": \"{{ $('Confirmation Routing').item.json['Guide Number'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"text7\", \"text\": \"{{ $('Confirmation Routing').item.json['Payment Status'] }}\" },\n          { \"type\": \"text\", \"parameter_name\": \"number5\", \"text\": \"{{ $('Confirmation Routing').item.json['Amount Due'] }}\" }\n        ]\n      }\n    ]\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4032,
+        768
+      ],
+      "id": "8cfea610-b2a1-49bc-8e18-482ff34a9b41",
+      "name": "Tour Confirmation (Guide)",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sJ7xz1FZWk06hKQN",
+          "name": "WA Template Cred."
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "843177978870149",
+        "recipientPhoneNumber": "={{ $('Checks for WA Message').item.json.messages[0].from }}",
+        "textBody": "=🟢 Congratulations 🟢\nThe booking is successful!!\n\nThe booking for {{ $json['Customer Name'] }} for a {{ $json['Tour Name'] }} on {{ $json['Tour Date'] }} at {{ $json['Tour Time'] }} is confirmed under guide {{ $json['Guide Name'] }}.",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        3856,
+        768
+      ],
+      "id": "29c52aa0-b0bd-444d-b468-7a9886bc37b9",
+      "name": "Sends Confirmation (Booking Number)",
+      "webhookId": "bfc5005b-d807-4d0c-9b9a-4e441ad560e9",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "Qkwpq4H3JlTH5FKG",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json[\"Driver Number\"].toLocaleString() }}",
+                    "rightValue": "NA",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "dbca7e84-959f-4d61-917c-8b8983fda36d"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "To Guide"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "7f9df4d8-7b23-4c56-a60d-45dc6f4da763",
+                    "leftValue": "={{ $json[\"Driver Number\"].toLocaleString() }}",
+                    "rightValue": "NA",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEquals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "To Guide+Driver"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        3536,
+        864
+      ],
+      "id": "44746d13-63ce-491a-a593-f244dd2fd5f4",
+      "name": "Confirmation Routing"
+    },
+    {
+      "parameters": {
+        "content": "## Confirming Details",
+        "height": 208,
+        "width": 464
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2592,
+        464
+      ],
+      "typeVersion": 1,
+      "id": "ed2ce67c-1139-48cd-8e02-e0111230b6c3",
+      "name": "Sticky Note10"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 184118957,
+          "mode": "list",
+          "cachedResultName": "All Tours",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit#gid=184118957"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Booking Date": "={{ $json[\"Booking Date\"] }}",
+            "Transfer": "={{ $json.Transfer }}",
+            "Customer Name": "={{ $json[\"Customer Name\"] }}",
+            "Customer Number": "={{ $json[\"Customer Number\"] }}",
+            "Customer Email": "={{ $json[\"Customer Email\"] }}",
+            "Tour Date": "={{ $json[\"Tour Date\"] }}",
+            "Tour Name": "={{ $json[\"Tour Name\"] }}",
+            "Driver Name": "={{ $json[\"Driver Name\"] }}",
+            "Driver Number": "={{ $json[\"Driver Number\"] }}",
+            "Guide Number": "={{ $json[\"Guide Number\"] }}",
+            "Guide Name": "={{ $json[\"Guide Name\"] }}",
+            "Additional Service": "={{ $json[\"Additional Service\"] }}",
+            "Payment Status": "={{ $json[\"Payment Status\"] }}",
+            "Amount Due": "={{ $json[\"Amount Due\"] }}",
+            "Tour Language": "={{ $json[\"Tour Language\"] }}",
+            "Tour Status": "={{ $json[\"Tour Status\"] }}",
+            "PAX": "={{ $json.PAX }}",
+            "Tour Time": "={{ $json[\"Tour Time\"] }}",
+            "Pick-up Location": "={{ $json[\"Pick-up Location\"] }}",
+            "Pick-up Time": "={{ $json[\"Pick-up Time\"] }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Booking Date",
+              "displayName": "Booking Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Name",
+              "displayName": "Tour Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Date",
+              "displayName": "Tour Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Time",
+              "displayName": "Tour Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "PAX",
+              "displayName": "PAX",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Number",
+              "displayName": "Customer Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Transfer",
+              "displayName": "Transfer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Driver Name",
+              "displayName": "Driver Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Driver Number",
+              "displayName": "Driver Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Pick-up Location",
+              "displayName": "Pick-up Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Pick-up Time",
+              "displayName": "Pick-up Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Additional Service",
+              "displayName": "Additional Service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Guide Name",
+              "displayName": "Guide Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Guide Number",
+              "displayName": "Guide Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Payment Status",
+              "displayName": "Payment Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Amount Due",
+              "displayName": "Amount Due",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Language",
+              "displayName": "Tour Language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Status",
+              "displayName": "Tour Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3344,
+        864
+      ],
+      "id": "595b28dc-815e-43fc-b9f8-de24ed61319d",
+      "name": "Appends Row to Master Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "I82S2hMMGRkTwcJl",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Confirmation Routing').item.json['Tour Language'] }}",
+                    "rightValue": "English",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "3ff2a296-cca8-43aa-b65f-95d3e255a81d"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "English Message"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "198ec317-a7a7-43e3-be26-b8565c593b68",
+                    "leftValue": "={{ $('Confirmation Routing').item.json['Tour Language'] }}",
+                    "rightValue": "Russian",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Russian Message"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.3,
+      "position": [
+        4240,
+        768
+      ],
+      "id": "b1c39507-3484-44d6-b7c9-0a1a0db62147",
+      "name": "Language Switch"
+    },
+    {
+      "parameters": {
+        "content": "# Updating Sheet (Other Tour Data Sheet)\n## It updates the 'Other Tour Data' Sheet upon receiving changes\n## made in the master sheet 'All Tours' for the ambiguous tours details.",
+        "height": 464,
+        "width": 912,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3344,
+        1472
+      ],
+      "typeVersion": 1,
+      "id": "0b297b9b-9b73-4415-ba1d-1c3571400557",
+      "name": "Sticky Note11"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dc617080-666e-405a-abd2-bb14a1c44074",
+              "leftValue": "={{ $json[\"Tour Name\"].toLowerCase() }}",
+              "rightValue": "new",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            },
+            {
+              "id": "e904f460-442b-48b4-8035-90b5040baefd",
+              "leftValue": "={{ $json.change_type }}",
+              "rightValue": "updated",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        3744,
+        1712
+      ],
+      "id": "12945ada-c79c-4738-b046-fe16c4226846",
+      "name": "Filter"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1584,
+        704
+      ],
+      "id": "996fb7c2-e63a-4387-b614-acc150221f97",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "fl6sxvn5M1m7Za9O",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "chatgpt-4o-latest",
+          "mode": "list",
+          "cachedResultName": "CHATGPT-4O-LATEST"
+        },
+        "text": "Get the booking details from the image.",
+        "inputType": "base64",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1120,
+        704
+      ],
+      "id": "dcbe3178-ada4-4d52-ba97-13c329425e10",
+      "name": "Analyze image",
+      "credentials": {
+        "openAiApi": {
+          "id": "fl6sxvn5M1m7Za9O",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1120,
+        288
+      ],
+      "id": "52a09240-6d07-4253-996a-dc056ef80cfe",
+      "name": "Transcribe a recording",
+      "credentials": {
+        "openAiApi": {
+          "id": "fl6sxvn5M1m7Za9O",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 954283526,
+          "mode": "list",
+          "cachedResultName": "other tours data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit#gid=954283526"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tour Name": "={{ $json[\"Tour Name\"] }}",
+            "Booking Date": "={{ $json[\"Booking Date\"] }}",
+            "Tour Date": "={{ $json[\"Tour Date\"] }}",
+            "Customer Number": "={{ $json[\"Customer Number\"] }}",
+            "Customer Name": "={{ $json[\"Customer Name\"] }}",
+            "Customer Email": "={{ $json[\"Customer Email\"] }}",
+            "Transfer": "={{ $json.Transfer }}",
+            "Driver Name": "={{ $json[\"Driver Name\"] }}",
+            "Driver Number": "={{ $json[\"Driver Number\"] }}",
+            "Additional Service": "={{ $json[\"Additional Service\"] }}",
+            "Guide Name": "={{ $json[\"Guide Name\"] }}",
+            "Guide Number": "={{ $json[\"Guide Number\"] }}",
+            "Payment Status": "={{ $json[\"Payment Status\"] }}",
+            "Tour Language": "={{ $json[\"Tour Language\"] }}",
+            "Tour Status": "={{ $json[\"Tour Status\"] }}",
+            "Amount Due": "={{ $json[\"Amount Due\"] }}",
+            "Tour Time": "={{ $json[\"Tour Time\"] }}",
+            "PAX": "={{ $json.PAX }}",
+            "Pick-up Location": "={{ $json[\"Pick-up Location\"] }}",
+            "Pick-up Time": "={{ $json[\"Pick-up Time\"] }}"
+          },
+          "matchingColumns": [
+            "Booking Date"
+          ],
+          "schema": [
+            {
+              "id": "Booking Date",
+              "displayName": "Booking Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tour Name",
+              "displayName": "Tour Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Date",
+              "displayName": "Tour Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Time",
+              "displayName": "Tour Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "PAX",
+              "displayName": "PAX",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Number",
+              "displayName": "Customer Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Customer Email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Transfer",
+              "displayName": "Transfer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Driver Name",
+              "displayName": "Driver Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Driver Number",
+              "displayName": "Driver Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Pick-up Location",
+              "displayName": "Pick-up Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Pick-up Time",
+              "displayName": "Pick-up Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Additional Service",
+              "displayName": "Additional Service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Guide Name",
+              "displayName": "Guide Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Guide Number",
+              "displayName": "Guide Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Payment Status",
+              "displayName": "Payment Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Amount Due",
+              "displayName": "Amount Due",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Language",
+              "displayName": "Tour Language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tour Status",
+              "displayName": "Tour Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3952,
+        1712
+      ],
+      "id": "bb0ca76f-bb4c-427c-9f8a-7187b133a3e8",
+      "name": "Update row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "I82S2hMMGRkTwcJl",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "documentId": {
+          "__rl": true,
+          "value": "1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w",
+          "mode": "list",
+          "cachedResultName": "Tour Booking Details",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 184118957,
+          "mode": "list",
+          "cachedResultName": "All Tours",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1JgIL09C6YZAag0zEAz4yiOzjAfwwcBgpuhS46bQT08w/edit#gid=184118957"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [
+        3520,
+        1712
+      ],
+      "id": "2de3c5ff-d118-430d-8948-9dc64e1d1752",
+      "name": "Google Sheets Trigger1",
+      "credentials": {
+        "googleSheetsTriggerOAuth2Api": {
+          "id": "jqLzqubC3wEfIOZa",
+          "name": "Google Sheets Trigger account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "phoneNumberId": "843177978870149",
+        "recipientPhoneNumber": "={{ $('Confirmation Routing').item.json['Customer Number'] }}",
+        "template": "tour_confirm_russian|ru",
+        "components": {
+          "component": [
+            {
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Tour Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Tour Date\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Tour Time\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json.PAX }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Customer Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Customer Number\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Customer Email\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json.Transfer }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Driver Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Driver Number\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Pick-up Location\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Pick-up Time\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Additional Service\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Guide Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Guide Number\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Payment Status\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Amount Due\"] }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        4496,
+        944
+      ],
+      "id": "c613940b-eb36-4555-8f23-f6d92ebd21de",
+      "name": "Send template(RS)",
+      "webhookId": "bc79d8ac-b129-4893-b91f-67cd70f5c354",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "Qkwpq4H3JlTH5FKG",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "phoneNumberId": "843177978870149",
+        "recipientPhoneNumber": "={{ $('Confirmation Routing').item.json['Customer Number'] }}",
+        "template": "tour_confirmation|en",
+        "components": {
+          "component": [
+            {
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Tour Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Tour Date\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Tour Time\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json.PAX }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Customer Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Customer Number\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Customer Email\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json.Transfer }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Driver Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Driver Number\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Pick-up Location\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Pick-up Time\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Additional Service\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Guide Name\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Guide Number\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Payment Status\"] }}"
+                  },
+                  {
+                    "text": "={{ $('Confirmation Routing').item.json[\"Amount Due\"] }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        4496,
+        752
+      ],
+      "id": "fa9fa920-48be-4170-bf8e-f6358b96d7f3",
+      "name": "Send template (EN)",
+      "webhookId": "bc79d8ac-b129-4893-b91f-67cd70f5c354",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "Qkwpq4H3JlTH5FKG",
+          "name": "WhatsApp account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Checks for WA Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parses AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Tour Names": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Sheets' Names",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheet List Aggregator": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Sheets": {
+      "main": [
+        [
+          {
+            "node": "Checks for Empty Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gets Every Tour Detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checks for Empty Sheets": {
+      "main": [
+        [
+          {
+            "node": "Filtering Tours for Today and Tomorrow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guide/Driver Routing": {
+      "main": [
+        [
+          {
+            "node": "Reminder to Guide",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reminder to Driver",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reminder to Guide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gets Every Tour Detail": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtering Tours for Today and Tomorrow": {
+      "main": [
+        [
+          {
+            "node": "Guide/Driver Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sheets' Names": {
+      "main": [
+        [
+          {
+            "node": "Sheet List Aggregator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message Type Routing": {
+      "main": [
+        [
+          {
+            "node": "Downloads Audio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Maps the WA Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Downloads Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Downloads Audio": {
+      "main": [
+        [
+          {
+            "node": "Processes Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Downloads Image": {
+      "main": [
+        [
+          {
+            "node": "Processes Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Maps Audio Output": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Maps Image Output": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Maps the WA Text": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Details-based Routing": {
+      "main": [
+        [
+          {
+            "node": "Messages for Missing Details",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Details Confirmation Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handles Empty/null Values",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handles Empty/null Values": {
+      "main": [
+        [
+          {
+            "node": "Routes Non-existent Tour",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Routes Non-existent Tour": {
+      "main": [
+        [
+          {
+            "node": "Appends Row for Known Tours",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Appends Row for Undefined Tours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parses AI Output": {
+      "main": [
+        [
+          {
+            "node": "Details-based Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processes Audio": {
+      "main": [
+        [
+          {
+            "node": "Transcribe a recording",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processes Image": {
+      "main": [
+        [
+          {
+            "node": "Analyze image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appends Row for Undefined Tours": {
+      "main": [
+        [
+          {
+            "node": "Appends Row to Master Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appends Row for Known Tours": {
+      "main": [
+        [
+          {
+            "node": "Appends Row to Master Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checks for WA Message": {
+      "main": [
+        [
+          {
+            "node": "Message Type Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sends Confirmation (Booking Number)": {
+      "main": [
+        [
+          {
+            "node": "Tour Confirmation (Guide)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tour Confirmation (Guide)": {
+      "main": [
+        [
+          {
+            "node": "Language Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmation Routing": {
+      "main": [
+        [
+          {
+            "node": "Sends Confirmation (Booking Number)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tour Confirmation (Driver)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sends Confirmation (Booking Number)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appends Row to Master Sheet": {
+      "main": [
+        [
+          {
+            "node": "Confirmation Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Language Switch": {
+      "main": [
+        [
+          {
+            "node": "Send template (EN)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send template(RS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter": {
+      "main": [
+        [
+          {
+            "node": "Update row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze image": {
+      "main": [
+        [
+          {
+            "node": "Maps Image Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe a recording": {
+      "main": [
+        [
+          {
+            "node": "Maps Audio Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Trigger1": {
+      "main": [
+        [
+          {
+            "node": "Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reminder to Guide": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Qatar",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "54d8418c-846f-4e7c-92e3-f97f2ee67867",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00e2d86f18476fa48a0bbe70e4f34123227f25798f2099883f45d509f13b7aa9"
+  },
+  "id": "YYbG0J0grpmok4dB",
+  "tags": []
+}
