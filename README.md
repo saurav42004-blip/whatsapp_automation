@@ -116,9 +116,7 @@ To run this workflow, configure the following in n8n:
 
 - WhatsApp API Credentials  
 - OpenAI API Key  
-- Google Sheets OAuth2 Credentials with Sheets scope:
-
-https://www.googleapis.com/auth/spreadsheets
+- Google Sheets OAuth2 Credentials with Sheets scope
 
 ---
 
